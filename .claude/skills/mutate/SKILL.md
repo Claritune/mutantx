@@ -81,13 +81,28 @@ Source files: 12 files in src/ (excluding tests)
 
 Look for `.mutants/manifest.json` in the project root.
 
-If it exists AND `regen` is not `"true"`:
-1. Read the manifest.
-2. Check if `source_commit` matches the current `HEAD` commit hash.
-3. If it matches, skip generation and proceed to Phase 3 (testing).
-4. If it doesn't match, inform the user that the source has changed and ask whether to regenerate or attempt to use existing patches.
+If `.mutants/` does not exist or `regen` is `"true"`, proceed with full generation.
 
-If `.mutants/` does not exist or `regen` is `"true"`, proceed with generation.
+If the manifest exists AND `regen` is not `"true"`, do a **per-file staleness check**:
+
+1. Read the manifest. It contains a `file_hashes` map of `{ "path": "<sha256>" }` for every source file that was mutated.
+2. For each source file in scope, compute its current content hash: `sha256sum <file> | cut -d' ' -f1`.
+3. Compare against the stored hash:
+   - **Hash matches** → the file hasn't changed. Keep its existing mutants and skip regeneration for this file.
+   - **Hash differs** → the file has changed. Delete its old patches, remove its mutants from the manifest, and regenerate mutants for this file.
+   - **File is new** (not in `file_hashes`) → generate mutants for it.
+   - **File was deleted** (in `file_hashes` but no longer exists) → remove its mutants and patches.
+4. Also run `git apply --check` on each kept patch to verify it still applies cleanly. If a patch no longer applies (e.g., due to upstream changes not reflected in the hash, or manual edits), discard that mutant and regenerate.
+
+Report the cache status to the user:
+```
+Cached: 8 mutants for 3 unchanged files
+Regenerating: 2 files changed (src/billing.ts, src/auth.ts)
+New: 1 file added (src/payments.ts)
+Removed: 1 file deleted (src/legacy.ts)
+```
+
+This per-file approach avoids re-running expensive LLM generation for unchanged files while ensuring mutants stay valid.
 
 ### Generating Mutants
 
@@ -175,12 +190,15 @@ Write `.mutants/manifest.json` with this schema:
 {
   "version": 1,
   "generated_at": "<ISO 8601 timestamp>",
-  "source_commit": "<current HEAD commit hash>",
   "config": {
     "language": "<detected language>",
     "test_command": "<test command>",
     "source_patterns": ["<glob patterns used>"],
     "count_per_file": 5
+  },
+  "file_hashes": {
+    "src/utils.ts": "<sha256 of file content at generation time>",
+    "src/billing.ts": "<sha256>"
   },
   "mutants": [
     {
@@ -196,6 +214,8 @@ Write `.mutants/manifest.json` with this schema:
   "summary": null
 }
 ```
+
+The `file_hashes` map stores the SHA-256 content hash of each source file at the time its mutants were generated. This is used for per-file cache invalidation — only files whose content actually changed need mutant regeneration. See "Check for Cached Mutants" above.
 
 After saving all patches and the manifest, tell the user how many mutants were generated and in which files.
 

@@ -149,7 +149,7 @@ Generated mutants are saved to `.mutants/` and reused on subsequent runs:
 
 ```
 .mutants/
-├── manifest.json          # Metadata, config, and test results
+├── manifest.json          # Metadata, config, per-file hashes, and test results
 ├── report.md              # Human-readable report
 └── patches/
     ├── 001.patch          # Individual unified diffs
@@ -157,9 +157,18 @@ Generated mutants are saved to `.mutants/` and reused on subsequent runs:
     └── ...
 ```
 
-The manifest records the commit hash at generation time. If the source code changes, MutantX detects the mismatch and offers to regenerate. Use `regen="true"` to force regeneration.
+### Per-File Cache Invalidation
 
-This caching means you can re-run the testing phase without burning LLM tokens to regenerate the same mutations.
+MutantX tracks a SHA-256 content hash for each mutated source file. On subsequent runs, it compares the stored hash against the current file content:
+
+- **File unchanged** — its mutants are kept as-is (no LLM call needed)
+- **File changed** — only that file's mutants are discarded and regenerated
+- **File added** — new mutants are generated
+- **File deleted** — its mutants are cleaned up
+
+This means editing one file in a 20-file project only regenerates mutants for that one file. Each kept patch is also verified with `git apply --check` to catch edge cases where the diff context no longer matches.
+
+Use `regen="true"` to force full regeneration regardless of hashes.
 
 ## Why AI-Powered?
 
