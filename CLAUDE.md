@@ -2,6 +2,10 @@
 
 AI-powered mutation testing for Claude Code. Language-agnostic.
 
+## Workflow
+
+Commit after each change. Do not batch multiple changes into one commit.
+
 ## Project Structure
 
 ```
