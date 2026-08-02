@@ -1,0 +1,14 @@
+# Mutation testing artifacts
+.mutants/
+
+# Build artifacts
+demos/cpp/test_runner
+demos/cpp/*.o
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# OS
+.DS_Store
