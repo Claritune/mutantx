@@ -1,0 +1,245 @@
+#!/usr/bin/env python3
+"""MutantX deterministic test runner.
+
+Reads .mutants/manifest.json, applies each patch, runs the test suite,
+records whether tests caught the mutation, and reverts. Zero AI tokens.
+
+Usage:
+    python mx-test.py [--mutants-dir .mutants] [--timeout 120]
+"""
+
+import argparse
+import json
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+
+def run_cmd(cmd: str, timeout: int, cwd: Path | None = None) -> tuple[int, str]:
+    """Run a shell command and return (exit_code, output)."""
+    try:
+        result = subprocess.run(
+            cmd,
+            shell=True,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            cwd=cwd,
+        )
+        output = (result.stdout + "\n" + result.stderr).strip()
+        return result.returncode, output
+    except subprocess.TimeoutExpired:
+        return -1, "TIMEOUT"
+
+
+def last_n_lines(text: str, n: int = 20) -> str:
+    lines = text.strip().splitlines()
+    return "\n".join(lines[-n:])
+
+
+def check_clean_tree() -> bool:
+    code, output = run_cmd("git status --porcelain", timeout=30)
+    if code != 0:
+        print(f"ERROR: git status failed: {output}", file=sys.stderr)
+        return False
+    if output.strip():
+        print("WARNING: Working tree has uncommitted changes.", file=sys.stderr)
+        print(output, file=sys.stderr)
+        return False
+    return True
+
+
+def run_baseline(test_command: str, timeout: int) -> tuple[bool, float]:
+    """Run baseline tests. Returns (passed, duration_seconds)."""
+    print("Running baseline tests...")
+    start = time.time()
+    code, output = run_cmd(test_command, timeout=timeout)
+    duration = time.time() - start
+
+    if code == 0:
+        print(f"  Baseline PASSED in {duration:.1f}s")
+        return True, duration
+    else:
+        print(f"  Baseline FAILED (exit code {code})", file=sys.stderr)
+        print(last_n_lines(output, 10), file=sys.stderr)
+        return False, duration
+
+
+def apply_patch(patch_path: Path) -> bool:
+    code, _ = run_cmd(f"git apply {patch_path}", timeout=30)
+    return code == 0
+
+
+def revert_patch(patch_path: Path, mutant: dict) -> bool:
+    code, _ = run_cmd(f"git apply -R {patch_path}", timeout=30)
+    if code != 0:
+        target_file = mutant.get("file", "")
+        if target_file:
+            code, _ = run_cmd(f"git checkout -- {target_file}", timeout=30)
+        return code == 0
+    return True
+
+
+def test_mutant(
+    mutant: dict,
+    mutants_dir: Path,
+    test_command: str,
+    timeout: int,
+) -> dict:
+    """Test a single mutant. Returns the updated mutant dict."""
+    patch_path = mutants_dir / mutant["patch_file"]
+    mutant_id = mutant["id"]
+    category = mutant.get("category", "unknown")
+    target_file = mutant.get("file", "unknown")
+    line = mutant.get("line", "?")
+
+    label = f"{category} in {target_file}:{line}"
+
+    if not patch_path.exists():
+        print(f"  Mutant {mutant_id}: {label} ... skipped (patch file missing)")
+        mutant["status"] = "skipped"
+        mutant["test_output"] = "Patch file not found"
+        return mutant
+
+    if not apply_patch(patch_path):
+        print(f"  Mutant {mutant_id}: {label} ... skipped (patch failed to apply)")
+        mutant["status"] = "skipped"
+        mutant["test_output"] = "Patch failed to apply"
+        return mutant
+
+    code, output = run_cmd(test_command, timeout=timeout)
+
+    revert_ok = revert_patch(patch_path, mutant)
+    if not revert_ok:
+        print(f"  WARNING: Failed to revert patch for mutant {mutant_id}", file=sys.stderr)
+
+    if code == -1:
+        status = "timeout"
+        symbol = "✓ (timeout)"
+    elif code != 0:
+        status = "killed"
+        symbol = "✓"
+    else:
+        status = "survived"
+        symbol = "✗"
+
+    print(f"  Mutant {mutant_id}: {label} ... {status} {symbol}")
+    mutant["status"] = status
+    mutant["test_output"] = last_n_lines(output)
+    return mutant
+
+
+def main():
+    parser = argparse.ArgumentParser(description="MutantX deterministic test runner")
+    parser.add_argument(
+        "--mutants-dir",
+        type=Path,
+        default=Path(".mutants"),
+        help="Path to the mutants directory (default: .mutants)",
+    )
+    parser.add_argument(
+        "--timeout",
+        type=int,
+        default=120,
+        help="Test command timeout in seconds (default: 120)",
+    )
+    parser.add_argument(
+        "--skip-baseline",
+        action="store_true",
+        help="Skip the baseline test run",
+    )
+    parser.add_argument(
+        "--no-clean-check",
+        action="store_true",
+        help="Skip the clean working tree check",
+    )
+    args = parser.parse_args()
+
+    manifest_path = args.mutants_dir / "manifest.json"
+    if not manifest_path.exists():
+        print(f"ERROR: {manifest_path} not found. Run /mx-generate first.", file=sys.stderr)
+        sys.exit(1)
+
+    with open(manifest_path) as f:
+        manifest = json.load(f)
+
+    test_command = manifest.get("config", {}).get("test_command")
+    if not test_command:
+        detect_path = args.mutants_dir / "detect.json"
+        if detect_path.exists():
+            with open(detect_path) as f:
+                detect = json.load(f)
+            test_command = detect.get("test_command")
+
+    if not test_command:
+        print("ERROR: No test command found in manifest or detect.json.", file=sys.stderr)
+        sys.exit(1)
+
+    # Pre-flight checks
+    if not args.no_clean_check:
+        if not check_clean_tree():
+            print("Aborting. Use --no-clean-check to skip this check.", file=sys.stderr)
+            sys.exit(1)
+
+    if not args.skip_baseline:
+        passed, baseline_duration = run_baseline(test_command, args.timeout)
+        if not passed:
+            print("ERROR: Baseline tests are failing. Fix your tests before running mutation testing.", file=sys.stderr)
+            sys.exit(1)
+        effective_timeout = max(args.timeout, int(baseline_duration * 3))
+    else:
+        effective_timeout = args.timeout
+
+    # Find pending mutants
+    mutants = manifest.get("mutants", [])
+    pending = [(i, m) for i, m in enumerate(mutants) if m.get("status") == "pending"]
+
+    if not pending:
+        print("No pending mutants to test.")
+        sys.exit(0)
+
+    total = len(mutants)
+    tested_before = total - len(pending)
+    print(f"\nTesting {len(pending)} mutants ({tested_before} already tested, {total} total)\n")
+
+    killed = survived = timeout = skipped = 0
+
+    for seq, (idx, mutant) in enumerate(pending, 1):
+        print(f"[{tested_before + seq}/{total}]", end="")
+        updated = test_mutant(mutant, args.mutants_dir, test_command, effective_timeout)
+        mutants[idx] = updated
+
+        match updated["status"]:
+            case "killed": killed += 1
+            case "survived": survived += 1
+            case "timeout": timeout += 1
+            case "skipped": skipped += 1
+
+        # Save progress after each mutant
+        manifest["mutants"] = mutants
+        with open(manifest_path, "w") as f:
+            json.dump(manifest, f, indent=2)
+
+    # Count totals including previously tested
+    total_killed = sum(1 for m in mutants if m["status"] == "killed")
+    total_survived = sum(1 for m in mutants if m["status"] == "survived")
+    total_timeout = sum(1 for m in mutants if m["status"] == "timeout")
+    total_skipped = sum(1 for m in mutants if m["status"] == "skipped")
+
+    print(f"\n{'='*50}")
+    print(f"Testing complete!")
+    print(f"  Killed:   {total_killed}")
+    print(f"  Survived: {total_survived}")
+    print(f"  Timeout:  {total_timeout}")
+    print(f"  Skipped:  {total_skipped}")
+
+    testable = total_killed + total_survived + total_timeout
+    if testable > 0:
+        score = (total_killed + total_timeout) / testable
+        print(f"  Score:    {score:.0%} ({total_killed + total_timeout}/{testable})")
+    print(f"\nRun mx-report.py to generate the full report.")
+
+
+if __name__ == "__main__":
+    main()
