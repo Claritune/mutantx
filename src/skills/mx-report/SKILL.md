@@ -7,101 +7,46 @@ arguments: []
 
 # MutantX — Phase 4: Reporting
 
-You are the reporting phase of a mutation testing engine. Your job is to analyze the test results from Phase 3, calculate the mutation score, and generate a detailed human-readable report.
+This phase has two layers:
 
----
+1. **Deterministic** (Python script) — calculates scores, generates summary tables, includes patch diffs for survived mutants
+2. **AI analysis** (this skill) — reads the report and adds "why this matters" explanations, suggested tests, and prioritized recommendations
 
-## Input
+## Step 1: Run the Deterministic Report Script
 
-Read `.mutants/manifest.json` for test results. If no mutants have been tested (all `status: "pending"`), tell the user to run `/mx-test` first.
+Locate and execute `mx-report.py`:
 
-## Calculate the Mutation Score
-
-```
-mutation_score = killed / (killed + survived)
-```
-
-Exclude `skipped` and `error` mutants from the score. `timeout` counts as killed.
-
-## Generate the Report
-
-Write `.mutants/report.md` with the following structure:
-
-```markdown
-# MutantX — Mutation Testing Report
-
-**Project:** <project name from directory>
-**Date:** <timestamp>
-**Commit:** <short hash from git rev-parse --short HEAD>
-
-## Summary
-
-| Metric | Value |
-|--------|-------|
-| Total mutants | N |
-| Killed | N (N%) |
-| Survived | N (N%) |
-| Timeout | N |
-| Skipped | N |
-| **Mutation Score** | **N%** |
-
-## Score Interpretation
-
-- **> 80%**: Strong test suite — tests catch most injected bugs.
-- **60–80%**: Moderate — there are meaningful gaps in test coverage.
-- **< 60%**: Weak — many realistic bugs would go undetected.
-
-## Survived Mutants ⚠️
-
-These mutants were NOT caught by your tests. Each one represents a potential gap in your test coverage.
-
-### Mutant NNN — <category> in `<file>`
-
-**Line N:** <description of what was changed>
-
-\```diff
-<the patch content>
-\```
-
-**Why this matters:** <brief explanation of what kind of bug this represents and what could go wrong in production>
-
-**Suggested test:** <concrete suggestion for a test that would catch this mutant>
-
-(Repeat for each survived mutant)
-
-## Killed Mutants ✓
-
-| ID | File | Line | Category | Description |
-|----|------|------|----------|-------------|
-| 001 | src/utils.ts | 42 | arithmetic_operator | Changed * to + in price calc |
-| ... | ... | ... | ... | ... |
-
-## Recommendations
-
-<2-5 bullet points summarizing the most important test gaps found and what areas of the code need better test coverage. Be specific — reference file names and functionality.>
+```bash
+python3 <path-to-mx-report.py> --mutants-dir .mutants
 ```
 
-For the survived mutants section, read the actual patch content from `.mutants/patches/NNN.patch` and include it. Also read the relevant source file to provide context in the "Why this matters" and "Suggested test" sections.
+Find `mx-report.py` by checking these locations in order:
+1. `./src/scripts/mx-report.py` (if inside the MutantX repo)
+2. `~/.claude/scripts/mx-report.py` (global install)
 
-## Update the Manifest Summary
+This generates `.mutants/report.md` with summary statistics, survived mutant patches, killed mutant table, and updates the manifest summary. Display the script's output to the user.
 
-Update the `summary` field in `manifest.json`:
+## Step 2: AI Analysis of Survived Mutants
 
-```json
-"summary": {
-  "total": 20,
-  "killed": 16,
-  "survived": 3,
-  "timeout": 1,
-  "skipped": 0,
-  "score": 0.84,
-  "tested_at": "<ISO 8601 timestamp>"
-}
-```
+After the script runs, read `.mutants/report.md`. For each survived mutant section (marked with `<!-- AI analysis -->` comments), replace the comment with:
 
-## Present Results to User
+### For each survived mutant:
 
-After writing the report, display a concise summary:
+1. Read the patch diff shown in the report.
+2. Read the relevant source file to understand the surrounding code context.
+3. Add these two sections after the diff block:
+
+**Why this matters:** A brief explanation of what kind of bug this mutation represents and what could go wrong in production if this bug existed. Be specific to the actual code, not generic.
+
+**Suggested test:** A concrete, copy-pasteable test case (in the project's language and test framework) that would catch this mutant. Use realistic test names and assertions.
+
+### After all survived mutants:
+
+Add a `## Recommendations` section at the end of the report with 2-5 bullet points summarizing the most important test gaps found. Be specific — reference file names and functionality, not generic advice.
+
+## Step 3: Present Results
+
+Display a concise summary to the user:
 
 ```
 Mutation Testing Complete!

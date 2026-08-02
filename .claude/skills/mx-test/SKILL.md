@@ -7,70 +7,56 @@ arguments: []
 
 # MutantX — Phase 3: Mutant Testing
 
-You are the testing phase of a mutation testing engine. Your job is to apply each generated mutant patch, run the project's test suite, record whether the tests caught the bug, and revert the patch.
+This phase is handled by the deterministic Python script `mx-test.py`. It applies each mutant patch, runs the test suite, records results, and reverts — all without consuming AI tokens.
 
----
+## How to Run
 
-## Input
+Locate `mx-test.py` from the MutantX installation. It is in the `scripts/` directory alongside the skills:
 
-Read `.mutants/manifest.json` for the list of mutants and test command. If the manifest doesn't exist, tell the user to run `/mx-generate` first.
-
-Read `.mutants/detect.json` for the test command if not present in the manifest config.
-
-## Pre-flight Checks
-
-1. **Clean working tree**: Run `git status --porcelain`. If there are uncommitted changes, warn the user and ask whether to proceed. Applying patches on a dirty tree risks merge conflicts and lost work.
-
-2. **Baseline test run**: Run the test command once on the unmodified code. If any tests fail, STOP and report: "Baseline tests are failing. Fix your tests before running mutation testing." Do not proceed — testing mutants against a failing baseline produces meaningless results.
-
-## Test Loop
-
-For each mutant in the manifest with `status: "pending"`:
-
-1. **Apply the patch:**
-   ```bash
-   git apply .mutants/patches/NNN.patch
-   ```
-   If this fails (e.g., code changed since generation), set status to `"skipped"` with a note and continue to the next mutant.
-
-2. **Run the test command** using the Bash tool with a timeout of 120000ms (2 minutes). If the project's tests normally run much faster or slower, adjust proportionally (e.g., 3× the baseline test duration).
-
-3. **Record the result:**
-   - Tests **FAILED** (non-zero exit code) → mutant is **killed** ✓ (tests caught the bug)
-   - Tests **PASSED** (zero exit code) → mutant **survived** ✗ (tests missed the bug)
-   - **Timeout** → mutant is **killed (timeout)** ✓ (mutation likely caused an infinite loop)
-   - **Patch failed to apply** → mutant is **skipped**
-
-4. **Revert the patch:**
-   ```bash
-   git apply -R .mutants/patches/NNN.patch
-   ```
-   If revert fails, use `git checkout -- <file>` as a fallback. Verify the file is restored before continuing.
-
-5. **Update the manifest** — set the mutant's `status` field and add `test_output` (last 20 lines of test output, for debugging).
-
-After each mutant, write the updated manifest to disk so progress is saved even if the process is interrupted.
-
-## Resuming Interrupted Runs
-
-If the manifest has some mutants with `status: "pending"` and others already tested, only test the pending ones. This allows resuming after an interruption without re-running already-tested mutants.
-
-## Compiled Languages
-
-For Rust, Go, Java, C#, C/C++ — after applying a patch, the project must compile. If a mutant causes a compilation error, mark it as `"killed (compile error)"` and count it as killed (the compiler caught it, even if no test did). But the generation phase should have tried to avoid these.
-
-## Progress Display
-
-Show progress to the user as testing proceeds:
-
-```
-Testing mutant 3/15: arithmetic_operator in src/utils.ts:42 ... killed ✓
-Testing mutant 4/15: return_value in src/auth.ts:87 ... survived ✗
+```bash
+python3 ~/.claude/scripts/mx-test.py
 ```
 
-After all mutants are tested, display a brief summary:
+Or if MutantX is installed at a known path:
 
+```bash
+python3 /path/to/mutantx/src/scripts/mx-test.py
 ```
-Testing complete: 12 killed, 2 survived, 1 skipped out of 15 mutants
-Run /mx-report to generate the full report.
+
+### Options
+
+| Flag | Description |
+|------|-------------|
+| `--mutants-dir PATH` | Path to the `.mutants/` directory (default: `.mutants`) |
+| `--timeout N` | Test command timeout in seconds (default: 120) |
+| `--skip-baseline` | Skip the baseline test run |
+| `--no-clean-check` | Skip the clean working tree check |
+
+## What the Script Does
+
+1. **Pre-flight checks:**
+   - Verifies the working tree is clean (no uncommitted changes)
+   - Runs baseline tests to confirm they pass on unmodified code
+
+2. **For each pending mutant:**
+   - Applies the patch: `git apply .mutants/patches/NNN.patch`
+   - Runs the test command with a timeout
+   - Records the result: killed, survived, timeout, or skipped
+   - Reverts the patch: `git apply -R .mutants/patches/NNN.patch`
+   - Saves progress to `manifest.json` after each mutant
+
+3. **Supports resuming** — only tests mutants with `status: "pending"`
+
+## When Invoked as a Skill
+
+If the user runs `/mx-test`, execute the script using the Bash tool:
+
+```bash
+python3 <path-to-mx-test.py> --mutants-dir .mutants
 ```
+
+Find `mx-test.py` by checking these locations in order:
+1. `./src/scripts/mx-test.py` (if inside the MutantX repo)
+2. `~/.claude/scripts/mx-test.py` (global install)
+
+Display the script output to the user as it runs.

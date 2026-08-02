@@ -30,22 +30,35 @@ If the project type cannot be determined, report the issue and stop.
 - Save patches to `.mutants/patches/NNN.patch` and metadata to `.mutants/manifest.json`.
 - Verify each patch applies cleanly with `git apply --check`.
 
-### 3. Test Mutants
+### 3. Test Mutants (Deterministic — Zero Tokens)
 
-- Verify the working tree is clean.
-- Run baseline tests — stop if they fail.
-- For each pending mutant:
-  1. Apply patch: `git apply .mutants/patches/NNN.patch`
-  2. Run test command (120s timeout)
-  3. Record result: killed, survived, timeout, or skipped
-  4. Revert: `git apply -R .mutants/patches/NNN.patch`
-  5. Update manifest on disk after each mutant
+Run the deterministic test script — do NOT implement the test loop yourself:
 
-### 4. Generate Report
+```bash
+python3 <path-to-mx-test.py> --mutants-dir .mutants
+```
 
-- Calculate mutation score: `killed / (killed + survived)`
-- Write `.mutants/report.md` with summary, survived mutant analysis, killed mutant table, and recommendations
-- Update `manifest.json` summary field
+Find `mx-test.py` by checking:
+1. `./src/scripts/mx-test.py`
+2. `~/.claude/scripts/mx-test.py`
+
+The script handles: clean tree check, baseline test run, patch apply/revert, result recording, and progress saving.
+
+### 4. Generate Report (Deterministic + AI Analysis)
+
+First, run the deterministic report script:
+
+```bash
+python3 <path-to-mx-report.py> --mutants-dir .mutants
+```
+
+Find `mx-report.py` at the same locations as mx-test.py.
+
+Then, read `.mutants/report.md` and enhance the survived mutant sections by adding:
+- **Why this matters:** explanation of the bug and production risk
+- **Suggested test:** concrete test case to catch the mutant
+
+Add a `## Recommendations` section with 2-5 prioritized bullet points.
 
 ## Output
 

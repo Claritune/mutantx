@@ -49,34 +49,37 @@ Generate up to `count` (default 5) mutants per source file as unified diff patch
 
 ---
 
-## Phase 3: Mutant Testing
+## Phase 3: Mutant Testing (Deterministic — Zero Tokens)
 
-Follow the instructions in `/mx-test`.
+This phase is handled by the `mx-test.py` Python script. It does not use AI.
 
-Before testing:
-1. Verify the working tree is clean (warn if not).
-2. Run a baseline test to confirm tests pass on unmodified code.
+Find and run the script:
 
-For each pending mutant:
-1. Apply the patch with `git apply`.
-2. Run the test command (120s timeout).
-3. Record: killed (tests failed), survived (tests passed), timeout (killed), or skipped (patch failed).
-4. Revert with `git apply -R`.
-5. Update the manifest after each mutant (resume-safe).
+```bash
+python3 <path-to-mx-test.py> --mutants-dir .mutants
+```
+
+Check these locations in order:
+1. `./src/scripts/mx-test.py` (if inside the MutantX repo)
+2. `~/.claude/scripts/mx-test.py` (global install)
+
+The script handles: clean tree check, baseline test run, applying/reverting patches, recording results, and saving progress after each mutant.
 
 ---
 
-## Phase 4: Reporting
+## Phase 4: Reporting (Deterministic + AI Analysis)
 
-Follow the instructions in `/mx-report`.
+### Step 1: Run the deterministic report script (zero tokens)
 
-Calculate the mutation score: `killed / (killed + survived)`.
+```bash
+python3 <path-to-mx-report.py> --mutants-dir .mutants
+```
 
-Generate `.mutants/report.md` with:
-- Summary table (total, killed, survived, timeout, skipped, score)
-- Survived mutants with patches, explanations, and suggested tests
-- Killed mutants summary
-- 2-5 prioritized recommendations
+Check same locations as mx-test.py. This generates `.mutants/report.md` with summary statistics, patch diffs for survived mutants, and killed mutant table.
+
+### Step 2: AI analysis of survived mutants
+
+Follow the instructions in `/mx-report` to add "why this matters" explanations, suggested tests, and prioritized recommendations to the report.
 
 Display a concise summary to the user:
 
