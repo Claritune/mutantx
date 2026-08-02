@@ -136,11 +136,31 @@ Each phase is also available as a standalone skill:
 | `/mx-test` | Apply patches, run tests, record results | **No** — runs `mx-test.py` |
 | `/mx-report` | Calculate score and generate the report | Partial — `mx-report.py` for stats, AI for analysis |
 
-### Standalone scripts (zero tokens)
+### Manual mutations
 
-The test runner, validator, and report generator are plain Python scripts that can run without Claude Code:
+You can add your own mutations alongside AI-generated ones:
 
 ```bash
+# 1. Edit a source file to introduce the bug you want to test
+vim src/billing.py
+
+# 2. Capture it as a mutation patch
+python3 ~/.claude/scripts/mx-capture.py -d "Removed rounding in total calculation"
+
+# 3. The file is reverted, the patch is saved — test as usual
+python3 ~/.claude/scripts/mx-test.py
+```
+
+Use `--keep` to leave the file modified after capture. Multiple changed files are captured as separate mutations.
+
+### Standalone scripts (zero tokens)
+
+All scripts are plain Python (stdlib only) and can run without Claude Code:
+
+```bash
+# Capture manual mutations from uncommitted changes
+python3 ~/.claude/scripts/mx-capture.py
+
 # Validate mutants against current source files
 python3 ~/.claude/scripts/mx-validate.py
 
@@ -333,6 +353,7 @@ src/
 │   ├── mx-test/           # Phase 3: invokes mx-test.py
 │   └── mx-report/         # Phase 4: invokes mx-report.py + AI analysis
 ├── scripts/               # Deterministic Python scripts — copy to ~/.claude/scripts/
+│   ├── mx-capture.py      # Manual mutation capture (zero tokens)
 │   ├── mx-validate.py     # Mutation validator (zero tokens)
 │   ├── mx-test.py         # Test runner (zero tokens)
 │   └── mx-report.py       # Report generator (zero tokens)
