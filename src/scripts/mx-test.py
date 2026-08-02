@@ -16,6 +16,15 @@ import time
 from pathlib import Path
 
 
+def find_sibling_script(name: str) -> Path | None:
+    """Find a script in the same directory as this script."""
+    here = Path(__file__).resolve().parent
+    candidate = here / name
+    if candidate.exists():
+        return candidate
+    return None
+
+
 def run_cmd(cmd: str, timeout: int, cwd: Path | None = None) -> tuple[int, str]:
     """Run a shell command and return (exit_code, output)."""
     try:
@@ -154,12 +163,49 @@ def main():
         action="store_true",
         help="Skip the clean working tree check",
     )
+    parser.add_argument(
+        "--skip-validation",
+        action="store_true",
+        help="Skip the pre-test mutation validation step",
+    )
     args = parser.parse_args()
 
     manifest_path = args.mutants_dir / "manifest.json"
     if not manifest_path.exists():
         print(f"ERROR: {manifest_path} not found. Run /mx-generate first.", file=sys.stderr)
         sys.exit(1)
+
+    # Run validation before testing
+    if not args.skip_validation:
+        validate_script = find_sibling_script("mx-validate.py")
+        if validate_script:
+            print("Validating mutants against current source files...")
+            code, output = run_cmd(
+                f"python3 {validate_script} --mutants-dir {args.mutants_dir}",
+                timeout=60,
+            )
+            print(output)
+            print()
+
+            # Re-read manifest after validation may have changed statuses
+            with open(manifest_path) as f:
+                manifest = json.load(f)
+
+            needs_review = sum(
+                1 for m in manifest.get("mutants", [])
+                if m.get("status") == "needs-review"
+            )
+            if needs_review > 0:
+                print(
+                    f"WARNING: {needs_review} mutants need AI review (file changed but patch applies).",
+                    file=sys.stderr,
+                )
+                print("  These will be skipped. To include them:", file=sys.stderr)
+                print("    - Run /mx-validate in Claude Code (AI review)", file=sys.stderr)
+                print("    - Or: python3 mx-validate.py --promote (trust patches)", file=sys.stderr)
+                print()
+        else:
+            print("Note: mx-validate.py not found, skipping validation.", file=sys.stderr)
 
     with open(manifest_path) as f:
         manifest = json.load(f)
