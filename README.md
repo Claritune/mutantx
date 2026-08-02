@@ -14,11 +14,19 @@ Unlike AST-based tools (Stryker, PIT, mutmut) that apply blind syntactic transfo
 
 ---
 
+## Requirements
+
+- [Claude Code](https://docs.anthropic.com/en/docs/claude-code)
+- [Python 3.10+](https://www.python.org/) (for the deterministic test runner and report generator — no additional packages needed)
+- [Git](https://git-scm.com/)
+
 ## Quick Start
 
 ```bash
-# 1. Install (copy skills to your Claude Code config)
+# 1. Install (copy skills and scripts to your Claude Code config)
 cp -r src/skills/* ~/.claude/skills/
+mkdir -p ~/.claude/scripts
+cp src/scripts/*.py ~/.claude/scripts/
 
 # 2. Open any project in Claude Code
 cd your-project
@@ -58,6 +66,10 @@ cd mutantx
 # Install skills globally
 cp -r src/skills/* ~/.claude/skills/
 
+# Install scripts (deterministic test runner + report generator)
+mkdir -p ~/.claude/scripts
+cp src/scripts/*.py ~/.claude/scripts/
+
 # Optional: install the autonomous agent
 mkdir -p ~/.claude/agents
 cp src/agents/mx-agent.md ~/.claude/agents/
@@ -69,6 +81,8 @@ Copy into your project's `.claude/` directory:
 
 ```bash
 cp -r src/skills/* your-project/.claude/skills/
+mkdir -p your-project/.claude/scripts
+cp src/scripts/*.py your-project/.claude/scripts/
 ```
 
 ### Verify installation
@@ -114,12 +128,24 @@ Runs all four phases: detect → generate → test → report.
 
 Each phase is also available as a standalone skill:
 
-| Skill | What it does |
-|-------|-------------|
-| `/mx-detect` | Detect project language, test command, source files |
-| `/mx-generate` | Generate mutant patches (with caching) |
-| `/mx-test` | Apply patches, run tests, record results |
-| `/mx-report` | Calculate score and generate the report |
+| Skill | What it does | Uses AI? |
+|-------|-------------|----------|
+| `/mx-detect` | Detect project language, test command, source files | Yes |
+| `/mx-generate` | Generate mutant patches (with caching) | Yes |
+| `/mx-test` | Apply patches, run tests, record results | **No** — runs `mx-test.py` |
+| `/mx-report` | Calculate score and generate the report | Partial — `mx-report.py` for stats, AI for analysis |
+
+### Standalone scripts (zero tokens)
+
+The test runner and report generator are plain Python scripts that can run without Claude Code:
+
+```bash
+# Run tests against generated mutants
+python3 ~/.claude/scripts/mx-test.py
+
+# Generate the report
+python3 ~/.claude/scripts/mx-report.py
+```
 
 ### Autonomous agent
 
@@ -176,19 +202,27 @@ Each mutant changes exactly one thing and is verified to be syntactically valid 
 
 **What it skips:** type declarations, imports, comments, logging, dead code, config-only constants.
 
-### Phase 3: Testing
+### Phase 3: Testing (deterministic — zero tokens)
+
+Handled entirely by `mx-test.py`, a Python script that runs without AI:
 
 1. Verifies your working tree is clean and baseline tests pass
 2. For each mutant: applies the patch → runs tests → records result → reverts
 3. Progress is saved after each mutant — interrupted runs resume where they left off
 
-### Phase 4: Reporting
+Once mutants are generated, you can re-test as many times as you want without spending any tokens.
 
-Generates `.mutants/report.md` with:
+### Phase 4: Reporting (deterministic + AI)
+
+`mx-report.py` generates `.mutants/report.md` with the mechanical parts (zero tokens):
 
 - **Mutation score** — percentage of mutants killed
-- **Survived mutants** — full diff, explanation, and suggested test to close the gap
+- **Survived mutants** — full diff included
 - **Killed mutants** — summary table
+
+The AI skill (`/mx-report`) then adds value on top:
+- **"Why this matters"** — explanation of the bug and production risk
+- **"Suggested test"** — concrete test case to catch the mutant
 - **Recommendations** — prioritized list of areas needing better coverage
 
 Score interpretation:
@@ -273,10 +307,13 @@ See each demo's `README.md` for details on what gaps to expect.
 src/
 ├── skills/                # Claude Code skills — copy to ~/.claude/skills/
 │   ├── mutate/            # Main orchestrator (runs all 4 phases)
-│   ├── mx-detect/         # Phase 1: project detection
-│   ├── mx-generate/       # Phase 2: mutant generation
-│   ├── mx-test/           # Phase 3: mutant testing
-│   └── mx-report/         # Phase 4: reporting
+│   ├── mx-detect/         # Phase 1: project detection (AI)
+│   ├── mx-generate/       # Phase 2: mutant generation (AI)
+│   ├── mx-test/           # Phase 3: invokes mx-test.py
+│   └── mx-report/         # Phase 4: invokes mx-report.py + AI analysis
+├── scripts/               # Deterministic Python scripts — copy to ~/.claude/scripts/
+│   ├── mx-test.py         # Test runner (zero tokens)
+│   └── mx-report.py       # Report generator (zero tokens)
 └── agents/                # Claude Code agents — copy to ~/.claude/agents/
     └── mx-agent.md        # Autonomous mutation testing agent
 demos/
@@ -288,10 +325,11 @@ demos/
 
 ## Limitations
 
-- **LLM token cost**: Mutant generation uses LLM calls. Cached patches avoid repeat costs, but initial generation on a large codebase can be significant. Use `files` to scope down.
+- **LLM token cost**: Mutant generation (Phase 2) uses LLM calls. Cached patches avoid repeat costs, and testing/reporting are token-free Python scripts. Use `files` to scope down initial generation.
 - **Sequential testing**: Mutants are tested one at a time (apply → test → revert). This is inherently serial to avoid interference.
 - **Test suite speed**: If your tests take minutes, testing 50 mutants takes hours. Target specific modules and keep `count` low.
 - **Git dependency**: Requires a git repository for clean patch application and reversion.
+- **Python 3.10+**: Required for the deterministic test runner and report generator (stdlib only, no pip packages).
 
 ---
 
