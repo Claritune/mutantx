@@ -9,6 +9,8 @@ MutantX evaluates how good your tests really are. It injects realistic bugs into
 
 Unlike AST-based tools (Stryker, PIT, mutmut) that apply blind syntactic transformations, MutantX understands your code semantically. It generates mutations that represent real bugs — off-by-one errors, swapped arguments, forgotten null checks — and avoids the equivalent mutants that plague traditional tools.
 
+**New to MutantX?** Read the **[full tutorial](TUTORIAL.md)** for a step-by-step walkthrough of every feature.
+
 <!-- Screenshot placeholder: add a terminal recording showing /mutate in action -->
 <!-- ![MutantX in action](docs/demo.gif) -->
 
