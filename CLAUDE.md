@@ -24,8 +24,11 @@ Phases 1-2 (detect, generate) use AI. Phases 3-4 (test, report) are deterministi
 |-------|-----------|-----|
 | Detect | `/mx-detect` skill | Yes |
 | Generate | `/mx-generate` skill | Yes |
+| Validate | `mx-validate.py` + `/mx-validate` skill | Deterministic + optional AI |
 | Test | `mx-test.py` script | No |
 | Report | `mx-report.py` script + `/mx-report` skill | Partial |
+
+Validation runs automatically before testing. If source files changed since generation, mutants are classified as valid, stale, or needs-review. The AI skill reviews ambiguous cases only.
 
 ## Skills
 
@@ -34,6 +37,7 @@ Phases 1-2 (detect, generate) use AI. Phases 3-4 (test, report) are deterministi
 | `/mutate` | Full mutation testing run (orchestrates all phases) |
 | `/mx-detect` | Phase 1: detect project language, test command, source files |
 | `/mx-generate` | Phase 2: generate mutant patches with per-file caching |
+| `/mx-validate` | Review mutants flagged as needs-review after file changes |
 | `/mx-test` | Phase 3: invokes `mx-test.py` |
 | `/mx-report` | Phase 4: invokes `mx-report.py` then adds AI analysis |
 

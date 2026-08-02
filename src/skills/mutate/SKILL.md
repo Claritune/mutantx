@@ -49,6 +49,16 @@ Generate up to `count` (default 5) mutants per source file as unified diff patch
 
 ---
 
+## Phase 2.5: Validation (Deterministic + Optional AI)
+
+The test script automatically validates mutants before testing, but if it reports `needs-review` mutants (source file changed, patch still applies), handle them:
+
+1. **Run `mx-validate.py`** (already done automatically by mx-test.py) — classifies mutants as valid, stale, or needs-review.
+2. **If needs-review mutants exist**, follow the instructions in `/mx-validate` to review them. This is the only step that uses AI tokens in the validation flow.
+3. **Alternative**: run `mx-validate.py --promote` to trust the patches and skip AI review.
+
+---
+
 ## Phase 3: Mutant Testing (Deterministic — Zero Tokens)
 
 This phase is handled by the `mx-test.py` Python script. It does not use AI.
@@ -63,7 +73,7 @@ Check these locations in order:
 1. `./src/scripts/mx-test.py` (if inside the MutantX repo)
 2. `~/.claude/scripts/mx-test.py` (global install)
 
-The script handles: clean tree check, baseline test run, applying/reverting patches, recording results, and saving progress after each mutant.
+The script automatically runs `mx-validate.py` first, then tests only `pending` mutants. Mutants marked `needs-review` or `stale` are skipped.
 
 ---
 

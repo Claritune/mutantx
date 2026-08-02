@@ -42,7 +42,9 @@ Find `mx-test.py` by checking:
 1. `./src/scripts/mx-test.py`
 2. `~/.claude/scripts/mx-test.py`
 
-The script handles: clean tree check, baseline test run, patch apply/revert, result recording, and progress saving.
+The script automatically validates mutants first (via `mx-validate.py`), then runs only pending mutants.
+
+If the script reports `needs-review` mutants (source file changed but patch applies), review them by reading the current source file and each flagged patch. Promote valid ones to `pending` and mark invalid ones as `stale` in `manifest.json`. Then re-run mx-test.py.
 
 ### 4. Generate Report (Deterministic + AI Analysis)
 

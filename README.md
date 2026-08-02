@@ -132,15 +132,19 @@ Each phase is also available as a standalone skill:
 |-------|-------------|----------|
 | `/mx-detect` | Detect project language, test command, source files | Yes |
 | `/mx-generate` | Generate mutant patches (with caching) | Yes |
+| `/mx-validate` | Review mutants flagged after source file changes | Yes (only for ambiguous cases) |
 | `/mx-test` | Apply patches, run tests, record results | **No** — runs `mx-test.py` |
 | `/mx-report` | Calculate score and generate the report | Partial — `mx-report.py` for stats, AI for analysis |
 
 ### Standalone scripts (zero tokens)
 
-The test runner and report generator are plain Python scripts that can run without Claude Code:
+The test runner, validator, and report generator are plain Python scripts that can run without Claude Code:
 
 ```bash
-# Run tests against generated mutants
+# Validate mutants against current source files
+python3 ~/.claude/scripts/mx-validate.py
+
+# Run tests against generated mutants (validates automatically)
 python3 ~/.claude/scripts/mx-test.py
 
 # Generate the report
@@ -202,13 +206,29 @@ Each mutant changes exactly one thing and is verified to be syntactically valid 
 
 **What it skips:** type declarations, imports, comments, logging, dead code, config-only constants.
 
+### Validation (automatic, deterministic + optional AI)
+
+Before testing, `mx-validate.py` checks whether source files have changed since mutants were generated. Each mutant gets one of three verdicts:
+
+| Verdict | Meaning | Action |
+|---------|---------|--------|
+| **valid** | File unchanged, patch applies | Ready to test |
+| **stale** | Patch no longer applies | Needs regeneration via `/mx-generate` |
+| **needs-review** | File changed but patch applies | Semantically ambiguous — AI review recommended |
+
+For `needs-review` mutants, you have three options:
+1. `/mx-validate` — AI reviews whether each mutation is still semantically meaningful
+2. `mx-validate.py --promote` — trust the patches, test them as-is (zero tokens)
+3. `/mx-generate regen="true"` — regenerate everything
+
 ### Phase 3: Testing (deterministic — zero tokens)
 
 Handled entirely by `mx-test.py`, a Python script that runs without AI:
 
-1. Verifies your working tree is clean and baseline tests pass
-2. For each mutant: applies the patch → runs tests → records result → reverts
-3. Progress is saved after each mutant — interrupted runs resume where they left off
+1. Automatically validates mutants first (runs `mx-validate.py`)
+2. Verifies your working tree is clean and baseline tests pass
+3. For each pending mutant: applies the patch → runs tests → records result → reverts
+4. Progress is saved after each mutant — interrupted runs resume where they left off
 
 Once mutants are generated, you can re-test as many times as you want without spending any tokens.
 
@@ -309,9 +329,11 @@ src/
 │   ├── mutate/            # Main orchestrator (runs all 4 phases)
 │   ├── mx-detect/         # Phase 1: project detection (AI)
 │   ├── mx-generate/       # Phase 2: mutant generation (AI)
+│   ├── mx-validate/       # Validation: AI review of ambiguous mutants
 │   ├── mx-test/           # Phase 3: invokes mx-test.py
 │   └── mx-report/         # Phase 4: invokes mx-report.py + AI analysis
 ├── scripts/               # Deterministic Python scripts — copy to ~/.claude/scripts/
+│   ├── mx-validate.py     # Mutation validator (zero tokens)
 │   ├── mx-test.py         # Test runner (zero tokens)
 │   └── mx-report.py       # Report generator (zero tokens)
 └── agents/                # Claude Code agents — copy to ~/.claude/agents/
