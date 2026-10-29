@@ -222,6 +222,15 @@ def main():
         print("ERROR: No test command found in manifest or detect.json.", file=sys.stderr)
         sys.exit(1)
 
+    # Find pending mutants before any pre-flight work: with nothing to test,
+    # the clean-tree check guards nothing and the baseline is wasted effort.
+    mutants = manifest.get("mutants", [])
+    pending = [(i, m) for i, m in enumerate(mutants) if m.get("status") == "pending"]
+
+    if not pending:
+        print("No pending mutants to test.")
+        sys.exit(0)
+
     # Pre-flight checks
     if not args.no_clean_check:
         if not check_clean_tree():
@@ -236,14 +245,6 @@ def main():
         effective_timeout = max(args.timeout, int(baseline_duration * 3))
     else:
         effective_timeout = args.timeout
-
-    # Find pending mutants
-    mutants = manifest.get("mutants", [])
-    pending = [(i, m) for i, m in enumerate(mutants) if m.get("status") == "pending"]
-
-    if not pending:
-        print("No pending mutants to test.")
-        sys.exit(0)
 
     total = len(mutants)
     tested_before = total - len(pending)
