@@ -1,0 +1,73 @@
+MutantX simple demo: a single prompt that emulates MutantX
+==========================================================
+
+Try the MutantX approach without installing anything. Paste the prompt below into
+Claude Code (or any AI coding agent that can run commands in your project).
+Replace the two placeholders first.
+
+---------------------------------------------------------------------------------
+
+Act as a mutation-testing tool for this project. Mutation testing checks whether the tests
+would catch real bugs: inject one small, realistic bug at a time, run the tests, and see if
+they fail.
+
+Target: <path to source file(s), e.g. src/calculator.py>
+Test command: <e.g. pytest, npm test, make test>
+
+Steps:
+
+1. Run the test command once on unmodified code. If the tests fail, stop and tell me.
+   Check `git status` and tell me if the target files have uncommitted changes. Your edits
+   and reverts must never overwrite them.
+
+2. Read the target file(s), NOT the tests (so you don't bias the bugs toward what the tests
+   already check). Write 8-10 mutants. Each mutant:
+   - changes exactly ONE thing, and still compiles/parses;
+   - is a bug a developer could plausibly write, such as an off-by-one (< vs <=), a wrong
+     operator, a flipped condition, a removed guard clause or early return, a dropped part
+     of an && condition, a wrong return value, a removed call with a side effect, a swapped
+     argument, a hardcoded value in place of a config value, or two steps in the wrong order;
+   - actually changes behaviour (skip "equivalent" changes that can't be observed).
+   Spread them out: at least one per function that contains logic, and cover guard clauses
+   and functions that return true/false or a status.
+   Show me the list (id, function, line, one-line description) before testing.
+
+3. For each mutant, one at a time:
+   a. apply the change;
+   b. run the test command (for compiled code, make sure it actually rebuilds the changed
+      file, e.g. delete its object file first);
+   c. record KILLED (tests failed), CRASHED (segfault/abort; count as killed but note it),
+      TIMEOUT (hung; count as killed), or SURVIVED (tests passed);
+   d. if killed, note which tests failed;
+   e. revert the change exactly, and confirm with `git diff` that the file is back to its
+      original state.
+
+4. Run the tests once more on unmodified code to confirm they pass.
+
+5. Report:
+   - Score: killed / total, stated as "X of N mutants tested". It is a small sample, not a
+     verdict on the whole suite.
+   - A table of every mutant: id, function, change, result, failing tests.
+   - For each SURVIVED mutant: the diff, why the bug matters, and a concrete test that would
+     catch it, written in the project's test framework.
+   - Mutants killed by only one test (fragile spots: weaken that test and the bug ships).
+   - Any crash, with the test helper that likely caused it.
+   - Functions that got no mutant.
+   Do not call any test "redundant" just because it killed nothing here. It may guard a
+   rule this small mutant set didn't touch.
+
+Do not modify the tests. Leave the source exactly as you found it.
+
+---------------------------------------------------------------------------------
+
+Chat-only variant (no terminal)
+-------------------------------
+
+Paste the source file and the test file into the chat along with the prompt, and replace
+steps 1, 3 and 4 with:
+
+   For each mutant, read the tests and predict whether any test would fail, quoting the
+   assertion that would catch it. Mark predictions as predictions.
+
+This still shows the idea, but it is reasoning rather than measurement, so the AI will
+sometimes be wrong about which mutants survive.
