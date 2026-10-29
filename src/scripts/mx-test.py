@@ -10,6 +10,7 @@ Usage:
 
 import argparse
 import json
+import shlex
 import subprocess
 import sys
 import time
@@ -47,16 +48,35 @@ def last_n_lines(text: str, n: int = 20) -> str:
     return "\n".join(lines[-n:])
 
 
-def check_clean_tree() -> bool:
-    code, output = run_cmd("git status --porcelain", timeout=30)
+def check_clean_tree(files: list[str] | None = None) -> bool:
+    """Check for uncommitted changes, limited to `files` when given.
+
+    Only the files the patches rewrite need to be clean; unrelated edits and
+    untracked files elsewhere in the repo cannot be harmed by a mutation run.
+    """
+    cmd = "git status --porcelain"
+    if files:
+        cmd += " -- " + " ".join(shlex.quote(f) for f in files)
+    code, output = run_cmd(cmd, timeout=30)
     if code != 0:
         print(f"ERROR: git status failed: {output}", file=sys.stderr)
         return False
     if output.strip():
-        print("WARNING: Working tree has uncommitted changes.", file=sys.stderr)
+        scope = "Files to be mutated have" if files else "Working tree has"
+        print(f"WARNING: {scope} uncommitted changes.", file=sys.stderr)
         print(output, file=sys.stderr)
         return False
     return True
+
+
+def patched_files(patch_path: Path) -> list[str]:
+    """Paths a unified diff writes to, from its `+++ b/...` headers."""
+    files = []
+    for line in patch_path.read_text().splitlines():
+        if line.startswith("+++ ") and not line.startswith("+++ /dev/null"):
+            path = line[4:].split("\t")[0].strip()
+            files.append(path[2:] if path.startswith("b/") else path)
+    return files
 
 
 def run_baseline(test_command: str, timeout: int) -> tuple[bool, float]:
@@ -93,14 +113,27 @@ def apply_patch(patch_path: Path) -> bool:
     return code == 0
 
 
-def revert_patch(patch_path: Path, mutant: dict) -> bool:
-    code, _ = run_cmd(f"git apply -R {patch_path}", timeout=30)
-    if code != 0:
-        target_file = mutant.get("file", "")
-        if target_file:
-            code, _ = run_cmd(f"git checkout -- {target_file}", timeout=30)
-        return code == 0
-    return True
+def backup_files(paths: list[str]) -> dict[str, bytes]:
+    return {p: Path(p).read_bytes() for p in paths if Path(p).exists()}
+
+
+def revert_patch(patch_path: Path, backup: dict[str, bytes]) -> bool:
+    """Revert a mutant, then make sure every file matches its pre-patch bytes.
+
+    Restoring from the in-memory backup (rather than `git checkout`) means a
+    failed `git apply -R` can never discard the user's uncommitted edits.
+    """
+    run_cmd(f"git apply -R {patch_path}", timeout=30)
+    ok = True
+    for path, content in backup.items():
+        p = Path(path)
+        if not p.exists() or p.read_bytes() != content:
+            try:
+                p.write_bytes(content)
+            except OSError as e:
+                print(f"  ERROR: could not restore {path}: {e}", file=sys.stderr)
+                ok = False
+    return ok
 
 
 def test_mutant(
@@ -130,6 +163,7 @@ def test_mutant(
         mutant["test_output"] = "Patch file not found"
         return mutant, last_run_end
 
+    backup = backup_files(patched_files(patch_path))
     wait_for_next_second(last_run_end)
     if not apply_patch(patch_path):
         print(f"  Mutant {mutant_id}: {label} ... skipped (patch failed to apply)")
@@ -141,7 +175,7 @@ def test_mutant(
     run_end = time.time()
 
     wait_for_next_second(run_end)
-    revert_ok = revert_patch(patch_path, mutant)
+    revert_ok = revert_patch(patch_path, backup)
     if not revert_ok:
         print(f"  WARNING: Failed to revert patch for mutant {mutant_id}", file=sys.stderr)
 
@@ -183,7 +217,12 @@ def main():
     parser.add_argument(
         "--no-clean-check",
         action="store_true",
-        help="Skip the clean working tree check",
+        help="Skip the clean-tree check on the files to be mutated",
+    )
+    parser.add_argument(
+        "--strict-clean",
+        action="store_true",
+        help="Require the whole working tree to be clean, not just the mutated files",
     )
     parser.add_argument(
         "--skip-validation",
@@ -260,7 +299,10 @@ def main():
 
     # Pre-flight checks
     if not args.no_clean_check:
-        if not check_clean_tree():
+        scope = None if args.strict_clean else sorted(
+            {m["file"] for _, m in pending if m.get("file")}
+        )
+        if not check_clean_tree(scope):
             print("Aborting. Use --no-clean-check to skip this check.", file=sys.stderr)
             sys.exit(1)
 
