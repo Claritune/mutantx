@@ -9,15 +9,21 @@ of the source files. Three possible outcomes per mutant:
   - needs-review: file changed but patch still applies — semantically
                   ambiguous, flag for AI review via /mx-validate
 
+It also fingerprints the test suite (test files + test command). Cached
+killed/survived results were measured against that suite, so when it changes
+every tested mutant is reset to pending and re-tested.
+
 Usage:
     python mx-validate.py [--mutants-dir .mutants]
     python mx-validate.py --promote          # trust patches, skip AI review
+    python mx-validate.py --retest           # re-test all cached results
     python mx-validate.py --json             # machine-readable output
 """
 
 import argparse
 import hashlib
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -29,6 +35,67 @@ def sha256_file(path: Path) -> str:
         for chunk in iter(lambda: f.read(8192), b""):
             h.update(chunk)
     return h.hexdigest()
+
+
+TESTED_STATUSES = ("killed", "survived", "timeout")
+
+# Fallback when detect.json has no `test_patterns`: common test file and
+# directory names across languages.
+TEST_PATH_RE = re.compile(
+    r"(^|/)(tests?|__tests__|spec|specs)/"
+    r"|(^|/)test_[^/]*$"
+    r"|_test\.[^/]+$"
+    r"|\.(test|spec)\.[^/]+$"
+    r"|(Test|Tests|_spec)\.[^/.]+$"
+)
+# Build and cache output that lands in test directories without being
+# gitignored. It changes on every run and must not count as a test change.
+ARTIFACT_RE = re.compile(
+    r"(^|/)(__pycache__|\.pytest_cache|node_modules|build|dist|target|cmake-build[^/]*)/"
+    r"|\.(pyc|pyo|o|obj|class|so|dylib|dll|a|exe)$"
+)
+
+
+def find_test_files(mutants_dir: Path) -> list[str]:
+    """Test files from detect.json `test_patterns`, else by naming convention."""
+    detect_path = mutants_dir / "detect.json"
+    patterns = []
+    if detect_path.exists():
+        with open(detect_path) as f:
+            patterns = json.load(f).get("test_patterns") or []
+    if patterns:
+        found = {str(p) for pat in patterns for p in Path(".").glob(pat) if p.is_file()}
+        return sorted(found)
+
+    result = subprocess.run(
+        ["git", "ls-files", "--cached", "--others", "--exclude-standard"],
+        capture_output=True, text=True, timeout=30,
+    )
+    if result.returncode != 0:
+        return []
+    return sorted(
+        f for f in result.stdout.splitlines()
+        if TEST_PATH_RE.search(f)
+        and not ARTIFACT_RE.search(f)
+        and not f.startswith(".mutants/")
+        and Path(f).is_file()
+    )
+
+
+def tests_fingerprint(test_files: list[str], test_command: str) -> str:
+    h = hashlib.sha256(test_command.encode())
+    for f in test_files:
+        h.update(f"\0{f}\0{sha256_file(Path(f))}".encode())
+    return h.hexdigest()
+
+
+def resolve_test_command(manifest: dict, mutants_dir: Path) -> str:
+    cmd = manifest.get("config", {}).get("test_command")
+    detect_path = mutants_dir / "detect.json"
+    if not cmd and detect_path.exists():
+        with open(detect_path) as f:
+            cmd = json.load(f).get("test_command")
+    return cmd or ""
 
 
 def patch_applies(patch_path: Path) -> bool:
@@ -55,11 +122,27 @@ def save_manifest(manifest: dict, mutants_dir: Path):
         json.dump(manifest, f, indent=2)
 
 
-def validate(mutants_dir: Path) -> dict:
+def validate(mutants_dir: Path, retest: bool = False) -> dict:
     """Validate all mutants. Returns a summary dict."""
     manifest = load_manifest(mutants_dir)
     stored_hashes = manifest.get("file_hashes", {})
     mutants = manifest.get("mutants", [])
+
+    # Re-test cached results if the test suite changed since they were recorded
+    test_files = find_test_files(mutants_dir)
+    current_tests = tests_fingerprint(test_files, resolve_test_command(manifest, mutants_dir))
+    stored_tests = manifest.get("tests_hash")
+    tested = [m for m in mutants if m.get("status") in TESTED_STATUSES]
+    retest_reason = None
+    if retest:
+        retest_reason = "--retest requested"
+    elif stored_tests and stored_tests != current_tests:
+        retest_reason = "tests changed since last run"
+    if retest_reason:
+        for m in tested:
+            m["status"] = "pending"
+            m["validation_note"] = f"Re-testing: {retest_reason}"
+    manifest["tests_hash"] = current_tests
 
     # Classify files
     referenced_files = {m["file"] for m in mutants if m.get("file")}
@@ -85,7 +168,7 @@ def validate(mutants_dir: Path) -> dict:
     already_tested = 0
 
     for m in mutants:
-        if m.get("status") in ("killed", "survived", "timeout"):
+        if m.get("status") in TESTED_STATUSES:
             already_tested += 1
             continue
         if m.get("status") in ("stale", "skipped"):
@@ -135,6 +218,10 @@ def validate(mutants_dir: Path) -> dict:
     save_manifest(manifest, mutants_dir)
 
     return {
+        "retest_reason": retest_reason,
+        "retested": len(tested) if retest_reason else 0,
+        "untracked_results": len(tested) if not stored_tests and not retest_reason else 0,
+        "test_files": len(test_files),
         "total_mutants": len(mutants),
         "already_tested": already_tested,
         "valid": counts["valid"],
@@ -170,6 +257,23 @@ def promote(mutants_dir: Path):
 
 def print_report(result: dict):
     print(f"Validation complete ({result['total_mutants']} mutants)\n")
+
+    if result["retest_reason"]:
+        print(
+            f"  {result['retest_reason'].capitalize()}: "
+            f"re-testing {result['retested']} cached mutants."
+        )
+    elif result["untracked_results"]:
+        print(
+            f"  Recorded the test-suite fingerprint ({result['test_files']} test files) for "
+            f"the first time.\n  {result['untracked_results']} cached results predate it; "
+            f"use --retest to re-verify them."
+        )
+    if result["test_files"] == 0:
+        print(
+            "  WARNING: no test files found, so test changes cannot invalidate cached "
+            "results.\n  Add `test_patterns` to .mutants/detect.json."
+        )
 
     if result["already_tested"]:
         print(f"  Already tested:     {result['already_tested']}")
@@ -216,12 +320,16 @@ def main():
         "--promote", action="store_true",
         help="Promote needs-review mutants to pending without AI review",
     )
+    parser.add_argument(
+        "--retest", action="store_true",
+        help="Reset all tested mutants to pending so they are re-tested",
+    )
     args = parser.parse_args()
 
     if args.promote:
         promote(args.mutants_dir)
     else:
-        result = validate(args.mutants_dir)
+        result = validate(args.mutants_dir, retest=args.retest)
         if args.json:
             print(json.dumps(result, indent=2))
         else:

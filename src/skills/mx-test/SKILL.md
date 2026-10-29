@@ -32,6 +32,7 @@ python3 /path/to/mutantx/src/scripts/mx-test.py
 | `--skip-baseline` | Skip the baseline test run |
 | `--no-clean-check` | Skip the clean-tree check on the files to be mutated |
 | `--strict-clean` | Require the whole working tree to be clean, not just the mutated files |
+| `--retest` | Re-test all cached results without regenerating patches |
 | `--skip-final-check` | Skip re-running the tests on unmutated code after the last mutant |
 
 ## What the Script Does
@@ -49,7 +50,7 @@ python3 /path/to/mutantx/src/scripts/mx-test.py
 
 3. **Final check:** re-runs the tests on unmutated code and fails loudly if they no longer pass (a failed revert or a stale build)
 
-4. **Supports resuming** — only tests mutants with `status: "pending"`
+4. **Supports resuming** — only tests mutants with `status: "pending"`. Cached results are reset to pending automatically when the test files or test command change.
 
 ## When Invoked as a Skill
 

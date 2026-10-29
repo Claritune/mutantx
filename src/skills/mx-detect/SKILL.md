@@ -75,9 +75,12 @@ Write `.mutants/detect.json`:
   "test_command": "<test command>",
   "source_files": ["path/to/file1.py", "path/to/file2.py"],
   "source_patterns": ["<glob patterns used>"],
+  "test_patterns": ["<glob patterns matching the test files>"],
   "detected_at": "<ISO 8601 timestamp>"
 }
 ```
+
+`test_patterns` lists globs (relative to the project root, `**` allowed) that match the test source files, for example `["tests/**/*.py"]` or `["tests/*.cpp"]`. `mx-validate.py` hashes these files and re-tests cached results when they change. If omitted, it falls back to common test naming conventions.
 
 Create the `.mutants/` directory if it doesn't exist.
 

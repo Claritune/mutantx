@@ -230,6 +230,11 @@ def main():
         help="Skip the pre-test mutation validation step",
     )
     parser.add_argument(
+        "--retest",
+        action="store_true",
+        help="Re-test all cached results (e.g. after changing the build or environment)",
+    )
+    parser.add_argument(
         "--skip-final-check",
         action="store_true",
         help="Skip re-running the tests on unmutated code after the last mutant",
@@ -247,7 +252,8 @@ def main():
         if validate_script:
             print("Validating mutants against current source files...")
             code, output = run_cmd(
-                f"python3 {validate_script} --mutants-dir {args.mutants_dir}",
+                f"python3 {validate_script} --mutants-dir {args.mutants_dir}"
+                + (" --retest" if args.retest else ""),
                 timeout=60,
             )
             print(output)

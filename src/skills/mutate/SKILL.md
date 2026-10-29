@@ -53,7 +53,7 @@ Generate up to `count` (default 5) mutants per source file as unified diff patch
 
 The test script automatically validates mutants before testing, but if it reports `needs-review` mutants (source file changed, patch still applies), handle them:
 
-1. **Run `mx-validate.py`** (already done automatically by mx-test.py) — classifies mutants as valid, stale, or needs-review.
+1. **Run `mx-validate.py`** (already done automatically by mx-test.py) — classifies mutants as valid, stale, or needs-review. If the test files or test command changed since the last run, it resets cached killed/survived results to pending so they are re-tested.
 2. **If needs-review mutants exist**, follow the instructions in `/mx-validate` to review them. This is the only step that uses AI tokens in the validation flow.
 3. **Alternative**: run `mx-validate.py --promote` to trust the patches and skip AI review.
 
