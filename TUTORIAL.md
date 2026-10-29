@@ -367,8 +367,8 @@ Full regeneration, ignoring cache entirely. Most expensive but guaranteed fresh.
 
 This is the core of the zero-token promise. Once mutants are generated as patch files, testing is purely mechanical:
 
-1. **Pre-flight checks:**
-   - Verifies the working tree is clean (no uncommitted changes)
+1. **Pre-flight checks** (skipped entirely when no mutants are pending):
+   - Verifies the files to be mutated have no uncommitted changes (`--strict-clean` checks the whole tree)
    - Runs the test suite on unmodified code — if baseline tests fail, stops immediately
 
 2. **For each pending mutant:**
@@ -380,11 +380,17 @@ This is the core of the zero-token promise. Once mutants are generated as patch 
 
 3. **Records the result:**
    - Tests **failed** → mutant is **killed** ✓ (your tests caught the bug)
+   - Test process **crashed** → mutant is **killed-crash** ✓ (counts as killed, but check the tests for unsafe helpers)
+   - Build **failed** (when `build_command` is set) → mutant is **killed-build** ✓ (no signal about test quality)
    - Tests **passed** → mutant **survived** ✗ (your tests missed it)
    - Tests **timed out** → mutant is **killed (timeout)** ✓ (likely an infinite loop)
    - Patch **failed to apply** → mutant is **skipped**
 
-4. **Saves progress** to `manifest.json` after each mutant. If interrupted (Ctrl+C, crash, timeout), re-running picks up where it left off.
+   Before each apply and revert, the script waits for a new wall-clock second, so Make and Python's `.pyc` cache always see the change. After each revert it checks the file matches its original bytes and restores it if not.
+
+4. **Final check:** re-runs the tests on unmutated code. If they fail, a revert or a stale build polluted the run and the script exits 1.
+
+5. **Saves progress** to `manifest.json` after each mutant. If interrupted (Ctrl+C, crash, timeout), re-running picks up where it left off.
 
 **Progress display:**
 ```
@@ -484,7 +490,7 @@ Use `--keep` to leave the file modified after capture:
 python3 ~/.claude/scripts/mx-capture.py --keep -d "Testing with the edit still applied"
 ```
 
-Remember to revert before running `mx-test.py` — the test runner checks for a clean working tree.
+Remember to revert before running `mx-test.py` — the test runner checks that the files to be mutated are clean.
 
 ### Mixing Manual and AI Mutations
 
@@ -549,12 +555,17 @@ Use `regen="true"` when:
 This is where caching shines. After adding tests to catch survived mutants:
 
 ```bash
-# Reset test results (set all statuses back to pending)
-# Then re-test with zero tokens:
+# Re-test with zero tokens:
 python3 ~/.claude/scripts/mx-test.py
 ```
 
-Note: `mx-test.py` only tests mutants with `status: "pending"`. If you want to re-test killed/survived mutants, you'll need to reset their status in `manifest.json` (or run `/mx-generate regen="true"` to start fresh).
+`mx-validate.py` fingerprints your test files and test command. When they change, every cached killed/survived result is reset to pending and re-tested automatically:
+
+```
+Tests changed since last run: re-testing 7 cached mutants.
+```
+
+Test files come from `test_patterns` in `detect.json`, or common naming conventions if it is missing. To force a re-test without changing the tests (for example after changing compiler flags), use `--retest`.
 
 ---
 
@@ -607,13 +618,16 @@ Options:
   --mutants-dir PATH    Mutants directory (default: .mutants)
   --timeout N           Test timeout in seconds (default: 120)
   --skip-baseline       Skip baseline test run
-  --no-clean-check      Skip working tree check
+  --no-clean-check      Skip the clean check on the files to be mutated
+  --strict-clean        Require the whole working tree to be clean
   --skip-validation     Skip pre-test validation
+  --retest              Re-test all cached results
+  --skip-final-check    Skip re-running tests on unmutated code at the end
 ```
 
 **Reads:** `manifest.json`, `detect.json`, patch files
 **Writes:** Updates `manifest.json` with test results
-**Exit codes:** 0 (testing complete), 1 (manifest missing, baseline fails, dirty tree)
+**Exit codes:** 0 (testing complete, or nothing pending), 1 (manifest missing, baseline fails, mutated files dirty, final check fails)
 
 ### mx-report.py
 
@@ -846,9 +860,9 @@ pytest
 python3 ~/.claude/scripts/mx-test.py
 ```
 
-### "Working tree has uncommitted changes"
+### "Files to be mutated have uncommitted changes"
 
-The test runner won't apply patches on a dirty tree. Commit or stash your changes:
+The test runner won't apply patches to files with local edits. Changes and untracked files elsewhere in the repo are fine. Commit or stash your changes:
 
 ```bash
 git stash

@@ -248,9 +248,10 @@ For `needs-review` mutants, you have three options:
 Handled entirely by `mx-test.py`, a Python script that runs without AI:
 
 1. Automatically validates mutants first (runs `mx-validate.py`)
-2. Verifies your working tree is clean and baseline tests pass
-3. For each pending mutant: applies the patch → runs tests → records result → reverts
-4. Progress is saved after each mutant — interrupted runs resume where they left off
+2. Verifies the files to be mutated have no local edits and baseline tests pass
+3. For each pending mutant: applies the patch → runs tests → records result (killed, crashed, build failed, timeout or survived) → reverts
+4. Re-runs the tests on unmutated code at the end to catch stale builds
+5. Progress is saved after each mutant — interrupted runs resume where they left off, and cached results are re-tested when the test files change
 
 Once mutants are generated, you can re-test as many times as you want without spending any tokens.
 
