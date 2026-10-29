@@ -30,22 +30,34 @@ python3 /path/to/mutantx/src/scripts/mx-test.py
 | `--mutants-dir PATH` | Path to the `.mutants/` directory (default: `.mutants`) |
 | `--timeout N` | Test command timeout in seconds (default: 120) |
 | `--skip-baseline` | Skip the baseline test run |
-| `--no-clean-check` | Skip the clean working tree check |
+| `--no-clean-check` | Skip the clean-tree check on the files to be mutated |
+| `--strict-clean` | Require the whole working tree to be clean, not just the mutated files |
+| `--retest` | Re-test all cached results without regenerating patches |
+| `--skip-final-check` | Skip re-running the tests on unmutated code after the last mutant |
 
 ## What the Script Does
 
 1. **Pre-flight checks:**
-   - Verifies the working tree is clean (no uncommitted changes)
+   - Verifies the files to be mutated have no uncommitted changes (the whole tree with `--strict-clean`)
    - Runs baseline tests to confirm they pass on unmodified code
 
 2. **For each pending mutant:**
    - Applies the patch: `git apply .mutants/patches/NNN.patch`
-   - Runs the test command with a timeout
-   - Records the result: killed, survived, timeout, or skipped
-   - Reverts the patch: `git apply -R .mutants/patches/NNN.patch`
+   - Runs the build command (if `build_command` is set), then the test command, with a timeout
+   - Records the result:
+     - `killed`: tests ran and at least one failed
+     - `killed-crash`: the test process crashed (signal exit such as SIGSEGV/SIGABRT, or a crash report in the output)
+     - `killed-build`: the build step failed (only when `build_command` is set)
+     - `timeout`: the run exceeded the timeout
+     - `survived`: all tests passed
+     - `skipped`: the patch was missing or failed to apply
+   - All `killed-*` statuses and `timeout` count toward the mutation score
+   - Reverts the patch: `git apply -R .mutants/patches/NNN.patch`, then restores each patched file from a byte-for-byte backup if it still differs, so local edits are never discarded
    - Saves progress to `manifest.json` after each mutant
 
-3. **Supports resuming** — only tests mutants with `status: "pending"`
+3. **Final check:** re-runs the tests on unmutated code and fails loudly if they no longer pass (a failed revert or a stale build)
+
+4. **Supports resuming** — only tests mutants with `status: "pending"`. Cached results are reset to pending automatically when the test files or test command change.
 
 ## When Invoked as a Skill
 

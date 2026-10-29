@@ -24,7 +24,7 @@ Find `mx-report.py` by checking these locations in order:
 1. `./src/scripts/mx-report.py` (if inside the MutantX repo)
 2. `~/.claude/scripts/mx-report.py` (global install)
 
-This generates `.mutants/report.md` with summary statistics, survived mutant patches, killed mutant table, and updates the manifest summary. Display the script's output to the user.
+This generates `.mutants/report.md` with summary statistics, survived mutant patches, a Crashed Mutants section (if any), killed mutant table, and updates the manifest summary. Display the script's output to the user.
 
 ## Step 2: AI Analysis of Survived Mutants
 
@@ -39,6 +39,10 @@ After the script runs, read `.mutants/report.md`. For each survived mutant secti
 **Why this matters:** A brief explanation of what kind of bug this mutation represents and what could go wrong in production if this bug existed. Be specific to the actual code, not generic.
 
 **Suggested test:** A concrete, copy-pasteable test case (in the project's language and test framework) that would catch this mutant. Use realistic test names and assertions.
+
+### For each crashed mutant (if a Crashed Mutants section exists):
+
+Read the crash output and the tests that exercise the mutated code. Add one line saying which test or helper most likely crashed and why (for example, "`spawnFirst()` calls `front()` on an empty vector after a non-fatal `EXPECT_EQ`"), and suggest making that helper safe (a fatal assertion or an emptiness check).
 
 ### After all survived mutants:
 
