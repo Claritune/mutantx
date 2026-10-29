@@ -43,6 +43,13 @@ CRASH_OUTPUT_RE = re.compile(
     r"|Illegal instruction|Floating point exception|Subprocess aborted"
     r"|AddressSanitizer|UndefinedBehaviorSanitizer|Fatal Python error"
 )
+HARD_CRASH_RE = re.compile(
+    r"Segmentation fault|SegFault|Bus error|Illegal instruction"
+    r"|Floating point exception|AddressSanitizer|UndefinedBehaviorSanitizer"
+    r"|Fatal Python error"
+)
+# assert() failure messages: macOS/BSD libc, glibc, MSVC.
+ASSERT_ABORT_RE = re.compile(r"Assertion failed|Assertion `.*' failed")
 
 # Every status that counts as the tests catching the mutant.
 KILLED_STATUSES = ("killed", "killed-crash", "killed-build", "timeout")
@@ -83,11 +90,13 @@ def run_suite(build_command: str | None, test_command: str, timeout: int) -> tup
 
 
 def is_crash(code: int, output: str) -> bool:
-    if code < 0:
-        return -code in CRASH_SIGNALS
-    if code > 128 and code - 128 in CRASH_SIGNALS:
-        return True
-    return bool(CRASH_OUTPUT_RE.search(output))
+    sig = -code if code < 0 else code - 128 if code > 128 else None
+    if sig not in CRASH_SIGNALS and not CRASH_OUTPUT_RE.search(output):
+        return False
+    # C assert() prints its failure and then aborts: that is an assertion
+    # failure, not a crash, unless something harder than an abort also hit.
+    abort_only = sig in (None, signal.SIGABRT) and not HARD_CRASH_RE.search(output)
+    return not (abort_only and ASSERT_ABORT_RE.search(output))
 
 
 def classify(code: int | None, output: str, stage: str) -> str:
