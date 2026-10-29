@@ -31,6 +31,7 @@ python3 /path/to/mutantx/src/scripts/mx-test.py
 | `--timeout N` | Test command timeout in seconds (default: 120) |
 | `--skip-baseline` | Skip the baseline test run |
 | `--no-clean-check` | Skip the clean working tree check |
+| `--skip-final-check` | Skip re-running the tests on unmutated code after the last mutant |
 
 ## What the Script Does
 
@@ -45,7 +46,9 @@ python3 /path/to/mutantx/src/scripts/mx-test.py
    - Reverts the patch: `git apply -R .mutants/patches/NNN.patch`
    - Saves progress to `manifest.json` after each mutant
 
-3. **Supports resuming** — only tests mutants with `status: "pending"`
+3. **Final check:** re-runs the tests on unmutated code and fails loudly if they no longer pass (a failed revert or a stale build)
+
+4. **Supports resuming** — only tests mutants with `status: "pending"`
 
 ## When Invoked as a Skill
 

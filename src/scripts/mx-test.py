@@ -75,6 +75,19 @@ def run_baseline(test_command: str, timeout: int) -> tuple[bool, float]:
         return False, duration
 
 
+def wait_for_next_second(after: float) -> None:
+    """Block until the wall clock is in a later whole second than `after`.
+
+    Make (3.81 on macOS) and Python's .pyc cache compare source mtimes to the
+    second. A source file rewritten in the same second as the last build keeps
+    the stale object or bytecode, silently polluting later results. Waiting here
+    before every patch apply and revert makes each source write strictly newer
+    than anything the previous test run produced.
+    """
+    while int(time.time()) <= int(after):
+        time.sleep(1 - (time.time() % 1) + 0.01)
+
+
 def apply_patch(patch_path: Path) -> bool:
     code, _ = run_cmd(f"git apply {patch_path}", timeout=30)
     return code == 0
@@ -95,8 +108,14 @@ def test_mutant(
     mutants_dir: Path,
     test_command: str,
     timeout: int,
-) -> dict:
-    """Test a single mutant. Returns the updated mutant dict."""
+    last_run_end: float,
+) -> tuple[dict, float]:
+    """Test a single mutant. Returns the updated mutant dict and the time its
+    test run finished.
+
+    `last_run_end` is when the previous test command finished; the patch is
+    not applied until the clock has moved past that second.
+    """
     patch_path = mutants_dir / mutant["patch_file"]
     mutant_id = mutant["id"]
     category = mutant.get("category", "unknown")
@@ -109,16 +128,19 @@ def test_mutant(
         print(f"  Mutant {mutant_id}: {label} ... skipped (patch file missing)")
         mutant["status"] = "skipped"
         mutant["test_output"] = "Patch file not found"
-        return mutant
+        return mutant, last_run_end
 
+    wait_for_next_second(last_run_end)
     if not apply_patch(patch_path):
         print(f"  Mutant {mutant_id}: {label} ... skipped (patch failed to apply)")
         mutant["status"] = "skipped"
         mutant["test_output"] = "Patch failed to apply"
-        return mutant
+        return mutant, last_run_end
 
     code, output = run_cmd(test_command, timeout=timeout)
+    run_end = time.time()
 
+    wait_for_next_second(run_end)
     revert_ok = revert_patch(patch_path, mutant)
     if not revert_ok:
         print(f"  WARNING: Failed to revert patch for mutant {mutant_id}", file=sys.stderr)
@@ -136,7 +158,7 @@ def test_mutant(
     print(f"  Mutant {mutant_id}: {label} ... {status} {symbol}")
     mutant["status"] = status
     mutant["test_output"] = last_n_lines(output)
-    return mutant
+    return mutant, run_end
 
 
 def main():
@@ -167,6 +189,11 @@ def main():
         "--skip-validation",
         action="store_true",
         help="Skip the pre-test mutation validation step",
+    )
+    parser.add_argument(
+        "--skip-final-check",
+        action="store_true",
+        help="Skip re-running the tests on unmutated code after the last mutant",
     )
     args = parser.parse_args()
 
@@ -245,6 +272,7 @@ def main():
         effective_timeout = max(args.timeout, int(baseline_duration * 3))
     else:
         effective_timeout = args.timeout
+    last_run_end = time.time()
 
     total = len(mutants)
     tested_before = total - len(pending)
@@ -254,7 +282,9 @@ def main():
 
     for seq, (idx, mutant) in enumerate(pending, 1):
         print(f"[{tested_before + seq}/{total}]", end="")
-        updated = test_mutant(mutant, args.mutants_dir, test_command, effective_timeout)
+        updated, last_run_end = test_mutant(
+            mutant, args.mutants_dir, test_command, effective_timeout, last_run_end
+        )
         mutants[idx] = updated
 
         match updated["status"]:
@@ -267,6 +297,25 @@ def main():
         manifest["mutants"] = mutants
         with open(manifest_path, "w") as f:
             json.dump(manifest, f, indent=2)
+
+    # All patches are reverted, so the suite must pass again. If it does not,
+    # a revert failed or the build reused mutated artifacts, and every result
+    # from this run is suspect.
+    if not args.skip_final_check:
+        print("\nRe-running tests on unmutated code...")
+        wait_for_next_second(last_run_end)
+        code, output = run_cmd(test_command, timeout=effective_timeout)
+        if code != 0:
+            print("ERROR: Tests fail on unmutated code after the run.", file=sys.stderr)
+            print(last_n_lines(output, 10), file=sys.stderr)
+            print(
+                "  A patch may not have been reverted, or the build reused mutated "
+                "objects.\n  Check `git status`, then reset tested mutants to "
+                "pending and re-run with a test command that forces a rebuild.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        print("  Unmutated code still passes.")
 
     # Count totals including previously tested
     total_killed = sum(1 for m in mutants if m["status"] == "killed")

@@ -38,6 +38,18 @@ If `test-cmd` is provided, use it directly. Otherwise, check for these indicator
 
 If no indicator is found, ask the user for the language, test command, and source file patterns.
 
+### Incremental builds (C/C++ and anything built with Make)
+
+`mx-test.py` waits for a new wall-clock second before every patch apply and revert, so timestamp-based rebuilds see each change. That covers Make, CMake's Makefile generator and Python's `.pyc` cache. It does not cover build systems that cache by content or by build ID in ways that can miss a one-line edit, or test commands that do not rebuild at all (for example, running `./build/tests` directly).
+
+For compiled projects, make sure the test command **rebuilds before it runs the tests**. If unsure, prefer one that deletes the object files of the mutated sources first, for example:
+
+```sh
+find build -name '*.o' -path '*core*' -delete && cmake --build build && ./build/tests/run_tests
+```
+
+Tell the user which rebuild strategy the test command relies on. `mx-test.py` re-runs the tests on unmutated code after the last mutant and fails loudly if a stale build left mutated code behind.
+
 ## Source File Selection
 
 If the user provides `files`, use that pattern instead of auto-detection, but still apply the exclusions below.
