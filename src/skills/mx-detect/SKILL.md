@@ -76,9 +76,12 @@ Write `.mutants/detect.json`:
   "source_files": ["path/to/file1.py", "path/to/file2.py"],
   "source_patterns": ["<glob patterns used>"],
   "test_patterns": ["<glob patterns matching the test files>"],
+  "build_command": "<optional: build step to run before test_command>",
   "detected_at": "<ISO 8601 timestamp>"
 }
 ```
+
+`build_command` is optional. For compiled languages, set it to the build step and keep `test_command` for running the tests, so `mx-test.py` can report mutants that break the build (`killed-build`) separately from mutants the tests catch. Omit it when the test command builds and tests in one step.
 
 `test_patterns` lists globs (relative to the project root, `**` allowed) that match the test source files, for example `["tests/**/*.py"]` or `["tests/*.cpp"]`. `mx-validate.py` hashes these files and re-tests cached results when they change. If omitted, it falls back to common test naming conventions.
 

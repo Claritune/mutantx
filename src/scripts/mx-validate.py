@@ -37,7 +37,7 @@ def sha256_file(path: Path) -> str:
     return h.hexdigest()
 
 
-TESTED_STATUSES = ("killed", "survived", "timeout")
+TESTED_STATUSES = ("killed", "killed-crash", "killed-build", "survived", "timeout")
 
 # Fallback when detect.json has no `test_patterns`: common test file and
 # directory names across languages.

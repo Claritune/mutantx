@@ -43,8 +43,15 @@ python3 /path/to/mutantx/src/scripts/mx-test.py
 
 2. **For each pending mutant:**
    - Applies the patch: `git apply .mutants/patches/NNN.patch`
-   - Runs the test command with a timeout
-   - Records the result: killed, survived, timeout, or skipped
+   - Runs the build command (if `build_command` is set), then the test command, with a timeout
+   - Records the result:
+     - `killed`: tests ran and at least one failed
+     - `killed-crash`: the test process crashed (signal exit such as SIGSEGV/SIGABRT, or a crash report in the output)
+     - `killed-build`: the build step failed (only when `build_command` is set)
+     - `timeout`: the run exceeded the timeout
+     - `survived`: all tests passed
+     - `skipped`: the patch was missing or failed to apply
+   - All `killed-*` statuses and `timeout` count toward the mutation score
    - Reverts the patch: `git apply -R .mutants/patches/NNN.patch`, then restores each patched file from a byte-for-byte backup if it still differs, so local edits are never discarded
    - Saves progress to `manifest.json` after each mutant
 

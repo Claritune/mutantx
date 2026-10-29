@@ -42,6 +42,10 @@ def read_patch(mutants_dir: Path, patch_file: str) -> str:
     return "(patch file not found)"
 
 
+# Every status that counts as the tests catching the mutant.
+KILLED_STATUSES = ("killed", "killed-crash", "killed-build", "timeout")
+
+
 def score_interpretation(score: float) -> str:
     if score > 0.8:
         return "Strong test suite — tests catch most injected bugs."
@@ -55,13 +59,16 @@ def generate_report(manifest: dict, mutants_dir: Path) -> str:
     mutants = manifest.get("mutants", [])
 
     killed = [m for m in mutants if m["status"] == "killed"]
+    crashed = [m for m in mutants if m["status"] == "killed-crash"]
+    build_failed = [m for m in mutants if m["status"] == "killed-build"]
     survived = [m for m in mutants if m["status"] == "survived"]
     timeout = [m for m in mutants if m["status"] == "timeout"]
     skipped = [m for m in mutants if m["status"] == "skipped"]
+    all_killed = [m for m in mutants if m["status"] in KILLED_STATUSES]
     total = len(mutants)
 
-    testable = len(killed) + len(survived) + len(timeout)
-    score = (len(killed) + len(timeout)) / testable if testable > 0 else 0.0
+    testable = len(all_killed) + len(survived)
+    score = len(all_killed) / testable if testable > 0 else 0.0
 
     killed_pct = f"{len(killed)/total*100:.0f}" if total else "0"
     survived_pct = f"{len(survived)/total*100:.0f}" if total else "0"
@@ -84,8 +91,10 @@ def generate_report(manifest: dict, mutants_dir: Path) -> str:
     lines.append("|--------|-------|")
     lines.append(f"| Total mutants | {total} |")
     lines.append(f"| Killed | {len(killed)} ({killed_pct}%) |")
-    lines.append(f"| Survived | {len(survived)} ({survived_pct}%) |")
+    lines.append(f"| Killed by crash | {len(crashed)} |")
+    lines.append(f"| Killed by build failure | {len(build_failed)} |")
     lines.append(f"| Timeout | {len(timeout)} |")
+    lines.append(f"| Survived | {len(survived)} ({survived_pct}%) |")
     lines.append(f"| Skipped | {len(skipped)} |")
     lines.append(f"| **Mutation Score** | **{score:.0%}** |")
     lines.append("")
@@ -127,19 +136,47 @@ def generate_report(manifest: dict, mutants_dir: Path) -> str:
             lines.append("<!-- AI analysis: run /mx-report in Claude Code for 'why this matters' and 'suggested test' -->")
             lines.append("")
 
+    # Crashes are kills, but they hide which other tests would have failed and
+    # often point at an unsafe test helper rather than a good assertion.
+    if crashed:
+        lines.append("## Crashed Mutants")
+        lines.append("")
+        lines.append(
+            "These mutants made the test process crash. They count as killed, but the "
+            "crash stopped the run early, so other failing tests went unobserved, and "
+            "a crash from undefined behaviour may not reproduce on another platform. "
+            "Check the tests for unsafe helpers, such as indexing an empty container "
+            "after a non-fatal assertion."
+        )
+        lines.append("")
+        for m in crashed:
+            lines.append(f"### Mutant {m['id']} — `{m.get('file', 'unknown')}`:{m.get('line', '?')}")
+            lines.append("")
+            lines.append(m.get("description", ""))
+            lines.append("")
+            lines.append("```text")
+            lines.append(m.get("test_output", "").rstrip())
+            lines.append("```")
+            lines.append("")
+
     # Killed mutants table
-    if killed or timeout:
+    if all_killed:
         lines.append("## Killed Mutants ✓")
         lines.append("")
         lines.append("| ID | File | Line | Category | Description |")
         lines.append("|----|------|------|----------|-------------|")
-        for m in killed + timeout:
+        notes = {
+            "killed-crash": " (crash)",
+            "killed-build": " (build failed)",
+            "timeout": " (timeout)",
+        }
+        for m in all_killed:
             mid = m["id"]
             f = m.get("file", "")
             line = m.get("line", "")
             cat = m.get("category", "").replace("_", " ")
             desc = m.get("description", "")
-            status_note = " (timeout)" if m["status"] == "timeout" else ""
+            status_note = notes.get(m["status"], "")
             lines.append(f"| {mid} | {f} | {line} | {cat}{status_note} | {desc} |")
         lines.append("")
 
@@ -162,17 +199,25 @@ def generate_report(manifest: dict, mutants_dir: Path) -> str:
 def update_manifest_summary(manifest: dict) -> dict:
     mutants = manifest.get("mutants", [])
 
-    killed = sum(1 for m in mutants if m["status"] == "killed")
-    survived = sum(1 for m in mutants if m["status"] == "survived")
-    timeout_count = sum(1 for m in mutants if m["status"] == "timeout")
-    skipped = sum(1 for m in mutants if m["status"] == "skipped")
+    def count(status: str) -> int:
+        return sum(1 for m in mutants if m["status"] == status)
+
+    killed = count("killed")
+    crashed = count("killed-crash")
+    build_failed = count("killed-build")
+    survived = count("survived")
+    timeout_count = count("timeout")
+    skipped = count("skipped")
     total = len(mutants)
-    testable = killed + survived + timeout_count
-    score = (killed + timeout_count) / testable if testable > 0 else 0.0
+    all_killed = killed + crashed + build_failed + timeout_count
+    testable = all_killed + survived
+    score = all_killed / testable if testable > 0 else 0.0
 
     manifest["summary"] = {
         "total": total,
         "killed": killed,
+        "killed_crash": crashed,
+        "killed_build": build_failed,
         "survived": survived,
         "timeout": timeout_count,
         "skipped": skipped,
@@ -219,11 +264,19 @@ def main():
 
     # Print summary to stdout
     summary = manifest["summary"]
-    testable = summary["killed"] + summary["survived"] + summary["timeout"]
+    all_killed = (
+        summary["killed"] + summary["killed_crash"]
+        + summary["killed_build"] + summary["timeout"]
+    )
+    testable = all_killed + summary["survived"]
     score_val = summary["score"]
 
     print(f"\nMutation Testing Complete!")
-    print(f"  Score: {score_val:.0%} ({summary['killed'] + summary['timeout']} killed / {testable} testable)")
+    print(f"  Score: {score_val:.0%} ({all_killed} killed / {testable} testable)")
+    if summary["killed_crash"]:
+        print(f"  Crashed: {summary['killed_crash']} mutants — see the Crashed Mutants section")
+    if summary["killed_build"]:
+        print(f"  Build failed: {summary['killed_build']} mutants — the generator should avoid these")
     if summary["survived"] > 0:
         print(f"  Survived: {summary['survived']} mutants — see {report_path} for details")
     else:

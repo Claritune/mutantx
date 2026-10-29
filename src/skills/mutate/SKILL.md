@@ -110,7 +110,8 @@ Top gaps:
 
 - **No test files found**: Stop and tell the user.
 - **Large projects (>30 files)**: Ask to narrow scope or auto-select 10 most complex files.
-- **Compiled languages**: Compilation errors count as killed. Try to avoid generating them.
+- **Compiled languages**: Mutants that break the build count as killed but carry no signal about test quality. Try to avoid generating them. Set `build_command` in `detect.json` so they are reported separately as `killed-build`.
+- **Crashes**: Mutants that crash the test process are reported as `killed-crash`. Mention them in the summary: a crash hides which other tests would have failed and often points at an unsafe test helper.
 - **Monorepos**: Scope tests to the relevant package/module when possible.
 - **Tests with side effects**: Warn if the test command involves deployment, databases, or external APIs.
 

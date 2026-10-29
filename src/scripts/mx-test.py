@@ -10,7 +10,9 @@ Usage:
 
 import argparse
 import json
+import re
 import shlex
+import signal
 import subprocess
 import sys
 import time
@@ -26,8 +28,31 @@ def find_sibling_script(name: str) -> Path | None:
     return None
 
 
-def run_cmd(cmd: str, timeout: int, cwd: Path | None = None) -> tuple[int, str]:
-    """Run a shell command and return (exit_code, output)."""
+# A test process that dies from one of these signals crashed rather than
+# failing an assertion. The shell reports it as 128+N, or Python as -N when
+# the shell execs the command directly.
+CRASH_SIGNALS = {
+    signal.SIGSEGV, signal.SIGABRT, signal.SIGBUS, signal.SIGFPE,
+    signal.SIGILL, signal.SIGKILL, signal.SIGTRAP,
+}
+
+# Crash reports from runners that catch the signal and exit normally
+# (e.g. CTest's "***Exception: SegFault"), or from sanitizers.
+CRASH_OUTPUT_RE = re.compile(
+    r"Segmentation fault|SegFault|Bus error|Abort trap|core dumped"
+    r"|Illegal instruction|Floating point exception|Subprocess aborted"
+    r"|AddressSanitizer|UndefinedBehaviorSanitizer|Fatal Python error"
+)
+
+# Every status that counts as the tests catching the mutant.
+KILLED_STATUSES = ("killed", "killed-crash", "killed-build", "timeout")
+
+
+def run_cmd(cmd: str, timeout: int, cwd: Path | None = None) -> tuple[int | None, str]:
+    """Run a shell command and return (exit_code, output).
+
+    The exit code is None on timeout, so it cannot be confused with a process
+    killed by a signal (negative codes)."""
     try:
         result = subprocess.run(
             cmd,
@@ -40,7 +65,41 @@ def run_cmd(cmd: str, timeout: int, cwd: Path | None = None) -> tuple[int, str]:
         output = (result.stdout + "\n" + result.stderr).strip()
         return result.returncode, output
     except subprocess.TimeoutExpired:
-        return -1, "TIMEOUT"
+        return None, "TIMEOUT"
+
+
+def run_suite(build_command: str | None, test_command: str, timeout: int) -> tuple[int | None, str, str]:
+    """Run the optional build step, then the tests.
+
+    Returns (exit_code, output, stage) where stage is "build" if the build
+    step failed and "test" otherwise.
+    """
+    if build_command:
+        code, output = run_cmd(build_command, timeout=timeout)
+        if code != 0:
+            return code, output, "build"
+    code, output = run_cmd(test_command, timeout=timeout)
+    return code, output, "test"
+
+
+def is_crash(code: int, output: str) -> bool:
+    if code < 0:
+        return -code in CRASH_SIGNALS
+    if code > 128 and code - 128 in CRASH_SIGNALS:
+        return True
+    return bool(CRASH_OUTPUT_RE.search(output))
+
+
+def classify(code: int | None, output: str, stage: str) -> str:
+    if code is None:
+        return "timeout"
+    if code == 0:
+        return "survived"
+    if stage == "build":
+        return "killed-build"
+    if is_crash(code, output):
+        return "killed-crash"
+    return "killed"
 
 
 def last_n_lines(text: str, n: int = 20) -> str:
@@ -79,18 +138,19 @@ def patched_files(patch_path: Path) -> list[str]:
     return files
 
 
-def run_baseline(test_command: str, timeout: int) -> tuple[bool, float]:
+def run_baseline(build_command: str | None, test_command: str, timeout: int) -> tuple[bool, float]:
     """Run baseline tests. Returns (passed, duration_seconds)."""
     print("Running baseline tests...")
     start = time.time()
-    code, output = run_cmd(test_command, timeout=timeout)
+    code, output, stage = run_suite(build_command, test_command, timeout)
     duration = time.time() - start
 
     if code == 0:
         print(f"  Baseline PASSED in {duration:.1f}s")
         return True, duration
     else:
-        print(f"  Baseline FAILED (exit code {code})", file=sys.stderr)
+        reason = "timed out" if code is None else f"{stage} step, exit code {code}"
+        print(f"  Baseline FAILED ({reason})", file=sys.stderr)
         print(last_n_lines(output, 10), file=sys.stderr)
         return False, duration
 
@@ -139,6 +199,7 @@ def revert_patch(patch_path: Path, backup: dict[str, bytes]) -> bool:
 def test_mutant(
     mutant: dict,
     mutants_dir: Path,
+    build_command: str | None,
     test_command: str,
     timeout: int,
     last_run_end: float,
@@ -171,7 +232,7 @@ def test_mutant(
         mutant["test_output"] = "Patch failed to apply"
         return mutant, last_run_end
 
-    code, output = run_cmd(test_command, timeout=timeout)
+    code, output, stage = run_suite(build_command, test_command, timeout)
     run_end = time.time()
 
     wait_for_next_second(run_end)
@@ -179,15 +240,14 @@ def test_mutant(
     if not revert_ok:
         print(f"  WARNING: Failed to revert patch for mutant {mutant_id}", file=sys.stderr)
 
-    if code == -1:
-        status = "timeout"
-        symbol = "✓ (timeout)"
-    elif code != 0:
-        status = "killed"
-        symbol = "✓"
-    else:
-        status = "survived"
-        symbol = "✗"
+    status = classify(code, output, stage)
+    symbol = {
+        "killed": "✓",
+        "killed-crash": "✓ (crash)",
+        "killed-build": "✓ (build failed)",
+        "timeout": "✓ (timeout)",
+        "survived": "✗",
+    }[status]
 
     print(f"  Mutant {mutant_id}: {label} ... {status} {symbol}")
     mutant["status"] = status
@@ -282,13 +342,16 @@ def main():
     with open(manifest_path) as f:
         manifest = json.load(f)
 
-    test_command = manifest.get("config", {}).get("test_command")
-    if not test_command:
-        detect_path = args.mutants_dir / "detect.json"
-        if detect_path.exists():
-            with open(detect_path) as f:
-                detect = json.load(f)
-            test_command = detect.get("test_command")
+    config = manifest.get("config", {})
+    detect = {}
+    detect_path = args.mutants_dir / "detect.json"
+    if detect_path.exists():
+        with open(detect_path) as f:
+            detect = json.load(f)
+    test_command = config.get("test_command") or detect.get("test_command")
+    # Optional separate build step, so build failures are told apart from
+    # test failures.
+    build_command = config.get("build_command") or detect.get("build_command")
 
     if not test_command:
         print("ERROR: No test command found in manifest or detect.json.", file=sys.stderr)
@@ -313,7 +376,7 @@ def main():
             sys.exit(1)
 
     if not args.skip_baseline:
-        passed, baseline_duration = run_baseline(test_command, args.timeout)
+        passed, baseline_duration = run_baseline(build_command, test_command, args.timeout)
         if not passed:
             print("ERROR: Baseline tests are failing. Fix your tests before running mutation testing.", file=sys.stderr)
             sys.exit(1)
@@ -326,20 +389,13 @@ def main():
     tested_before = total - len(pending)
     print(f"\nTesting {len(pending)} mutants ({tested_before} already tested, {total} total)\n")
 
-    killed = survived = timeout = skipped = 0
-
     for seq, (idx, mutant) in enumerate(pending, 1):
         print(f"[{tested_before + seq}/{total}]", end="")
         updated, last_run_end = test_mutant(
-            mutant, args.mutants_dir, test_command, effective_timeout, last_run_end
+            mutant, args.mutants_dir, build_command, test_command,
+            effective_timeout, last_run_end,
         )
         mutants[idx] = updated
-
-        match updated["status"]:
-            case "killed": killed += 1
-            case "survived": survived += 1
-            case "timeout": timeout += 1
-            case "skipped": skipped += 1
 
         # Save progress after each mutant
         manifest["mutants"] = mutants
@@ -352,7 +408,7 @@ def main():
     if not args.skip_final_check:
         print("\nRe-running tests on unmutated code...")
         wait_for_next_second(last_run_end)
-        code, output = run_cmd(test_command, timeout=effective_timeout)
+        code, output, _ = run_suite(build_command, test_command, effective_timeout)
         if code != 0:
             print("ERROR: Tests fail on unmutated code after the run.", file=sys.stderr)
             print(last_n_lines(output, 10), file=sys.stderr)
@@ -366,22 +422,29 @@ def main():
         print("  Unmutated code still passes.")
 
     # Count totals including previously tested
-    total_killed = sum(1 for m in mutants if m["status"] == "killed")
-    total_survived = sum(1 for m in mutants if m["status"] == "survived")
-    total_timeout = sum(1 for m in mutants if m["status"] == "timeout")
-    total_skipped = sum(1 for m in mutants if m["status"] == "skipped")
+    counts = {}
+    for m in mutants:
+        counts[m["status"]] = counts.get(m["status"], 0) + 1
 
     print(f"\n{'='*50}")
     print(f"Testing complete!")
-    print(f"  Killed:   {total_killed}")
-    print(f"  Survived: {total_survived}")
-    print(f"  Timeout:  {total_timeout}")
-    print(f"  Skipped:  {total_skipped}")
+    print(f"  Killed:        {counts.get('killed', 0)}")
+    print(f"  Crashed:       {counts.get('killed-crash', 0)}")
+    print(f"  Build failed:  {counts.get('killed-build', 0)}")
+    print(f"  Timeout:       {counts.get('timeout', 0)}")
+    print(f"  Survived:      {counts.get('survived', 0)}")
+    print(f"  Skipped:       {counts.get('skipped', 0)}")
 
-    testable = total_killed + total_survived + total_timeout
+    total_killed = sum(counts.get(s, 0) for s in KILLED_STATUSES)
+    testable = total_killed + counts.get("survived", 0)
     if testable > 0:
-        score = (total_killed + total_timeout) / testable
-        print(f"  Score:    {score:.0%} ({total_killed + total_timeout}/{testable})")
+        print(f"  Score:         {total_killed / testable:.0%} ({total_killed}/{testable})")
+    if counts.get("killed-crash"):
+        print(
+            "\n  Crashed mutants stopped the test run early, so later failures were not"
+            "\n  observed. A crash often points at an unsafe test helper (e.g. indexing"
+            "\n  an empty container after a non-fatal assertion)."
+        )
     print(f"\nRun mx-report.py to generate the full report.")
 
 
